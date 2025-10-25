@@ -1,9 +1,9 @@
 
+import argparse
+import json
 import random
-import string
 from dataclasses import dataclass, asdict
 from typing import List, Dict, Tuple, Optional
-from collections import defaultdict
 
 FIRST_NAMES = [
     "Alex", "Sam", "Jordan", "Taylor", "Casey", "Riley", "Avery", "Morgan", "Quinn", "Reese",
@@ -11,11 +11,52 @@ FIRST_NAMES = [
     "Robin", "Kelly", "Leslie", "Skyler", "Rowan", "Sawyer", "Parker", "Elliot", "Harley", "Remy"
 ]
 
-RELATIONS = [
+COMMON_RELATIONS = [
     "parent_of", "child_of", "sibling_of", "cousin_of", "spouse_of",
     "friend_of", "coworker_of", "neighbor_of",
-    "left_of", "right_of", "next_to", "across_from",
 ]
+
+LINEAR_RELATIONS = ["left_of", "right_of", "next_to"]
+
+CIRCULAR_RELATIONS = ["left_of", "right_of", "next_to", "across_from"]
+
+RELATION_SETS = {
+    "common": COMMON_RELATIONS,
+    "linear": LINEAR_RELATIONS,
+    "circular": CIRCULAR_RELATIONS,
+}
+
+VALID_SEATING_KINDS = ("linear", "circular")
+DEFAULT_RELATION_PROFILE = "auto"
+VALID_RELATION_PROFILES = ("auto", "social", "spatial", "all")
+
+
+def _relation_pool(seating_kind: str, relation_profile: Optional[str]) -> List[str]:
+    """Select relations compatible with the seating layout and requested profile."""
+    if seating_kind not in VALID_SEATING_KINDS:
+        raise ValueError(f"Unsupported seating kind: {seating_kind}")
+
+    profile = (relation_profile or DEFAULT_RELATION_PROFILE).lower()
+    if profile == "auto":
+        groups = ("common", seating_kind)
+    elif profile == "social":
+        groups = ("common",)
+    elif profile == "spatial":
+        groups = (seating_kind,)
+    elif profile == "all":
+        groups = ("common", "linear", "circular")
+    else:
+        raise ValueError(f"Unsupported relation profile: {relation_profile}")
+
+    deduped: List[str] = []
+    seen = set()
+    for group in groups:
+        for rel in RELATION_SETS[group]:
+            if rel in seen:
+                continue
+            seen.add(rel)
+            deduped.append(rel)
+    return deduped
 
 INVERSE = {
     "parent_of": "child_of",
@@ -86,7 +127,7 @@ def _graph_to_dot(facts: List[Fact]) -> str:
     lines.append("}")
     return "\n".join(lines)
 
-def _build_path(names: List[str], min_len: int) -> Tuple[List[Fact], List[str]]:
+def _build_path(names: List[str], min_len: int, relations: List[str]) -> Tuple[List[Fact], List[str]]:
     L = max(min_len, 1) + random.randint(0, 2)
     path_facts: List[Fact] = []
     path_ids: List[str] = []
@@ -94,7 +135,7 @@ def _build_path(names: List[str], min_len: int) -> Tuple[List[Fact], List[str]]:
     current = random.choice(names)
     for _ in range(L):
         next_name = random.choice([n for n in names if n != current] or [current])
-        rel = random.choice(RELATIONS)
+        rel = random.choice(relations)
         pair = _add_bidirectional_facts(current, rel, next_name)
         path_facts.extend(pair)
         path_ids.append(pair[0].id)
@@ -113,21 +154,36 @@ def _dedupe_facts(facts: List[Fact]) -> List[Fact]:
         out.append(f)
     return out
 
-def generate(n_people: int, min_graph_len: int, seed: Optional[int] = None) -> Puzzle:
+def generate(
+    n_people: int,
+    min_graph_len: int,
+    seed: Optional[int] = None,
+    *,
+    seating_kind: Optional[str] = None,
+    relation_profile: Optional[str] = None
+) -> Puzzle:
     if seed is not None:
         random.seed(seed)
 
     names = _make_names(n_people, allow_duplicates=True)
 
     # Seating
-    kind = random.choice(["linear", "circular"])
+    if seating_kind is None:
+        kind = random.choice(VALID_SEATING_KINDS)
+    else:
+        kind = seating_kind.lower()
+        if kind not in VALID_SEATING_KINDS:
+            raise ValueError(f"Unsupported seating kind: {seating_kind}")
+
     order = names[:]
     random.shuffle(order)
     seats = {i + 1: order[i] for i in range(len(order))}
     seating = Seating(kind=kind, seats=seats)
 
+    relations = _relation_pool(kind, relation_profile)
+
     # Path + extra facts
-    path_facts, path_ids = _build_path(names, min_graph_len)
+    path_facts, path_ids = _build_path(names, min_graph_len, relations)
 
     extra_facts: List[Fact] = []
     extra_edges = random.randint(max(0, n_people - 2), n_people + 2)
@@ -136,7 +192,7 @@ def generate(n_people: int, min_graph_len: int, seed: Optional[int] = None) -> P
             a, b = random.sample(names, 2)
         else:
             a = b = names[0]
-        rel = random.choice(RELATIONS)
+        rel = random.choice(relations)
         extra_facts.extend(_add_bidirectional_facts(a, rel, b))
 
     all_facts = _dedupe_facts(path_facts + extra_facts)
@@ -149,3 +205,69 @@ def generate(n_people: int, min_graph_len: int, seed: Optional[int] = None) -> P
         solution_path=path_ids,
         dot=dot
     )
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Generate a relationship puzzle.")
+    parser.add_argument(
+        "--people",
+        type=int,
+        default=5,
+        help="Number of people to include (default: 5).",
+    )
+    parser.add_argument(
+        "--length",
+        type=int,
+        default=2,
+        help="Minimum graph length for the solution path (default: 2).",
+    )
+    parser.add_argument(
+        "--seed",
+        type=int,
+        default=None,
+        help="Random seed for reproducible output.",
+    )
+    parser.add_argument(
+        "--seating-kind",
+        choices=VALID_SEATING_KINDS,
+        help=f"Force a seating layout ({', '.join(VALID_SEATING_KINDS)}).",
+    )
+    parser.add_argument(
+        "--relations",
+        choices=VALID_RELATION_PROFILES,
+        help="Select relation profile (auto, social, spatial, all).",
+    )
+    parser.add_argument(
+        "--format",
+        choices=("json", "text"),
+        default="json",
+        help="Output format (default: json).",
+    )
+    args = parser.parse_args()
+
+    puzzle = generate(
+        args.people,
+        args.length,
+        seed=args.seed,
+        seating_kind=args.seating_kind,
+        relation_profile=args.relations,
+    )
+
+    if args.format == "json":
+        print(json.dumps(asdict(puzzle), indent=2))
+        return
+
+    print(f"Seating ({puzzle.seating.kind}):")
+    for pos, name in sorted(puzzle.seating.seats.items()):
+        print(f"  {pos}: {name}")
+
+    print("\nFacts:")
+    for fact in puzzle.facts:
+        print(f"  {fact.id}: {fact.subj} {fact.rel} {fact.obj}")
+
+    print("\nSolution path IDs:")
+    print("  " + ", ".join(puzzle.solution_path))
+
+
+if __name__ == "__main__":
+    main()
