@@ -80,6 +80,12 @@ ANSI_RESET = "\033[0m"
 
 SPATIAL_RELATIONS = set(LINEAR_RELATIONS) | set(HIGH_LINEAR_RELATIONS) | {"across_from", "clockwise_of", "counterclockwise_of"}
 
+EMPTY_PREFIX = "EMPTY_"
+
+
+def _is_empty(name: str) -> bool:
+    return name.startswith(EMPTY_PREFIX)
+
 CANONICAL_RELATIONS = {
     "parent_of": ("parent_of", False),
     "child_of": ("parent_of", True),
@@ -100,16 +106,14 @@ def _build_spatial_relation_map(seating: "Seating") -> Dict[Tuple[str, str], Set
         return {}
 
     ordered = [name for _, name in sorted(seats.items())]
-    positions = {name: idx for idx, name in enumerate(ordered)}
+    positions = {name: idx for idx, name in enumerate(ordered) if not _is_empty(name)}
     relation_map: Dict[Tuple[str, str], Set[str]] = {}
 
     if seating.kind == "linear":
-        for subj in ordered:
-            for obj in ordered:
+        for subj, idx_subj in positions.items():
+            for obj, idx_obj in positions.items():
                 if subj == obj:
                     continue
-                idx_subj = positions[subj]
-                idx_obj = positions[obj]
                 if idx_subj < idx_obj:
                     relation_map.setdefault((subj, obj), set()).add("left_of")
                 if idx_subj > idx_obj:
@@ -125,23 +129,22 @@ def _build_spatial_relation_map(seating: "Seating") -> Dict[Tuple[str, str], Set
 
     # circular seating
     n = len(ordered)
-    for obj in ordered:
-        idx_obj = positions[obj]
+    for obj, idx_obj in positions.items():
         left_name = ordered[(idx_obj - 1) % n]
         right_name = ordered[(idx_obj + 1) % n]
         two_left_name = ordered[(idx_obj - 2) % n]
         two_right_name = ordered[(idx_obj + 2) % n]
-        for subj, rel, extras in (
-            (left_name, "left_of", {"next_to", "counterclockwise_of"}),
-            (right_name, "right_of", {"next_to", "clockwise_of"}),
-        ):
-            relation_map.setdefault((subj, obj), set()).add(rel)
-            relation_map[(subj, obj)].update(extras)
-        relation_map.setdefault((two_left_name, obj), set()).add("two_left_of")
-        relation_map.setdefault((two_right_name, obj), set()).add("two_right_of")
+        if not _is_empty(left_name):
+            relation_map.setdefault((left_name, obj), set()).update({"left_of", "next_to", "counterclockwise_of"})
+        if not _is_empty(right_name):
+            relation_map.setdefault((right_name, obj), set()).update({"right_of", "next_to", "clockwise_of"})
+        if not _is_empty(two_left_name):
+            relation_map.setdefault((two_left_name, obj), set()).add("two_left_of")
+        if not _is_empty(two_right_name):
+            relation_map.setdefault((two_right_name, obj), set()).add("two_right_of")
         if n % 2 == 0:
             across_name = ordered[(idx_obj + n // 2) % n]
-            if across_name != obj:
+            if across_name != obj and not _is_empty(across_name):
                 relation_map.setdefault((across_name, obj), set()).add("across_from")
 
     return relation_map
@@ -462,14 +465,22 @@ def generate(
         if kind not in VALID_SEATING_KINDS:
             raise ValueError(f"Unsupported seating kind: {seating_kind}")
 
-    order = names[:]
-    random.shuffle(order)
-    seats = {i + 1: order[i] for i in range(len(order))}
-    seating = Seating(kind=kind, seats=seats)
-
     diff_level = (difficulty or "low").lower()
     if diff_level not in VALID_DIFFICULTY_LEVELS:
         raise ValueError(f"Unsupported difficulty level: {difficulty}")
+
+    order = names[:]
+    random.shuffle(order)
+    extra_slots = 0
+    if diff_level == "medium":
+        extra_slots = 1
+    elif diff_level == "high":
+        extra_slots = max(1, len(names) // 3)
+    empties = [f"{EMPTY_PREFIX}{i+1}" for i in range(extra_slots)]
+    seating_list = order + empties
+    random.shuffle(seating_list)
+    seats = {i + 1: seating_list[i] for i in range(len(seating_list))}
+    seating = Seating(kind=kind, seats=seats)
 
     relations = _relation_pool(kind, relation_profile, diff_level)
     if relations and all(rel in SPATIAL_RELATIONS for rel in relations) and len(names) < 2:
@@ -577,7 +588,8 @@ def main() -> None:
 
     print(f"Seating ({puzzle.seating.kind}):")
     for pos, name in sorted(puzzle.seating.seats.items()):
-        print(f"  {pos}: {name}")
+        display = "(empty)" if _is_empty(name) else name
+        print(f"  {pos}: {display}")
 
     print("\nFacts:")
     for fact in puzzle.facts:
