@@ -29,9 +29,47 @@ RELATION_SETS = {
 VALID_SEATING_KINDS = ("linear", "circular")
 DEFAULT_RELATION_PROFILE = "auto"
 VALID_RELATION_PROFILES = ("auto", "social", "spatial", "all")
+VALID_DIFFICULTY_LEVELS = ("low", "medium", "high")
+
+MEDIUM_COMMON_RELATIONS = [
+    "classmate_of",
+    "teammate_of",
+    "mentor_of",
+    "mentee_of",
+]
+
+HIGH_COMMON_RELATIONS = MEDIUM_COMMON_RELATIONS + [
+    "manager_of",
+    "reports_to",
+    "rival_of",
+]
+
+HIGH_LINEAR_RELATIONS = ["two_left_of", "two_right_of"]
+
+HIGH_CIRCULAR_RELATIONS = HIGH_LINEAR_RELATIONS + ["clockwise_of", "counterclockwise_of"]
+
+DIFFICULTY_ADDITIONS = {
+    "low": {
+        "common": [],
+        "linear": [],
+        "circular": [],
+    },
+    "medium": {
+        "common": MEDIUM_COMMON_RELATIONS,
+        "linear": [],
+        "circular": [],
+    },
+    "high": {
+        "common": HIGH_COMMON_RELATIONS,
+        "linear": HIGH_LINEAR_RELATIONS,
+        "circular": HIGH_CIRCULAR_RELATIONS,
+    },
+}
 
 RELATION_CATEGORY = {rel: "social" for rel in COMMON_RELATIONS}
-for rel in set(LINEAR_RELATIONS + CIRCULAR_RELATIONS):
+for rel in HIGH_COMMON_RELATIONS:
+    RELATION_CATEGORY.setdefault(rel, "social")
+for rel in set(LINEAR_RELATIONS + CIRCULAR_RELATIONS + HIGH_LINEAR_RELATIONS + ["clockwise_of", "counterclockwise_of"]):
     RELATION_CATEGORY.setdefault(rel, "spatial")
 
 ANSI_COLORS = {
@@ -40,13 +78,19 @@ ANSI_COLORS = {
 }
 ANSI_RESET = "\033[0m"
 
-SPATIAL_RELATIONS = set(LINEAR_RELATIONS) | {"across_from"}
+SPATIAL_RELATIONS = set(LINEAR_RELATIONS) | set(HIGH_LINEAR_RELATIONS) | {"across_from", "clockwise_of", "counterclockwise_of"}
 
 CANONICAL_RELATIONS = {
     "parent_of": ("parent_of", False),
     "child_of": ("parent_of", True),
     "left_of": ("left_of", False),
     "right_of": ("left_of", True),
+    "mentee_of": ("mentor_of", True),
+    "two_left_of": ("two_left_of", False),
+    "two_right_of": ("two_left_of", True),
+    "clockwise_of": ("clockwise_of", False),
+    "counterclockwise_of": ("clockwise_of", True),
+    "reports_to": ("manager_of", True),
 }
 
 
@@ -72,6 +116,11 @@ def _build_spatial_relation_map(seating: "Seating") -> Dict[Tuple[str, str], Set
                     relation_map.setdefault((subj, obj), set()).add("right_of")
                 if abs(idx_subj - idx_obj) == 1:
                     relation_map.setdefault((subj, obj), set()).add("next_to")
+                if abs(idx_subj - idx_obj) == 2:
+                    if idx_subj < idx_obj:
+                        relation_map.setdefault((subj, obj), set()).add("two_left_of")
+                    else:
+                        relation_map.setdefault((subj, obj), set()).add("two_right_of")
         return relation_map
 
     # circular seating
@@ -80,9 +129,16 @@ def _build_spatial_relation_map(seating: "Seating") -> Dict[Tuple[str, str], Set
         idx_obj = positions[obj]
         left_name = ordered[(idx_obj - 1) % n]
         right_name = ordered[(idx_obj + 1) % n]
-        for subj, rel in ((left_name, "left_of"), (right_name, "right_of")):
+        two_left_name = ordered[(idx_obj - 2) % n]
+        two_right_name = ordered[(idx_obj + 2) % n]
+        for subj, rel, extras in (
+            (left_name, "left_of", {"next_to", "counterclockwise_of"}),
+            (right_name, "right_of", {"next_to", "clockwise_of"}),
+        ):
             relation_map.setdefault((subj, obj), set()).add(rel)
-            relation_map.setdefault((subj, obj), set()).add("next_to")
+            relation_map[(subj, obj)].update(extras)
+        relation_map.setdefault((two_left_name, obj), set()).add("two_left_of")
+        relation_map.setdefault((two_right_name, obj), set()).add("two_right_of")
         if n % 2 == 0:
             across_name = ordered[(idx_obj + n // 2) % n]
             if across_name != obj:
@@ -189,10 +245,18 @@ def _pick_relation_pair(
     return subj, obj, random.choice(valid)
 
 
-def _relation_pool(seating_kind: str, relation_profile: Optional[str]) -> List[str]:
+def _relation_pool(
+    seating_kind: str,
+    relation_profile: Optional[str],
+    difficulty: str,
+) -> List[str]:
     """Select relations compatible with the seating layout and requested profile."""
     if seating_kind not in VALID_SEATING_KINDS:
         raise ValueError(f"Unsupported seating kind: {seating_kind}")
+    difficulty_normalized = (difficulty or "low").lower()
+    if difficulty_normalized not in VALID_DIFFICULTY_LEVELS:
+        raise ValueError(f"Unsupported difficulty level: {difficulty}")
+    additions = DIFFICULTY_ADDITIONS[difficulty_normalized]
 
     profile = (relation_profile or DEFAULT_RELATION_PROFILE).lower()
     if profile == "auto":
@@ -208,12 +272,17 @@ def _relation_pool(seating_kind: str, relation_profile: Optional[str]) -> List[s
 
     deduped: List[str] = []
     seen = set()
-    for group in groups:
-        for rel in RELATION_SETS[group]:
+
+    def add_relations(items: List[str]) -> None:
+        for rel in items:
             if rel in seen:
                 continue
             seen.add(rel)
             deduped.append(rel)
+
+    for group in groups:
+        add_relations(RELATION_SETS[group])
+        add_relations(additions.get(group, []))
     return deduped
 
 
@@ -249,10 +318,21 @@ INVERSE = {
     "friend_of": "friend_of",
     "coworker_of": "coworker_of",
     "neighbor_of": "neighbor_of",
+    "classmate_of": "classmate_of",
+    "teammate_of": "teammate_of",
+    "mentor_of": "mentee_of",
+    "mentee_of": "mentor_of",
+    "manager_of": "reports_to",
+    "reports_to": "manager_of",
+    "rival_of": "rival_of",
     "left_of": "right_of",
     "right_of": "left_of",
     "next_to": "next_to",
     "across_from": "across_from",
+    "two_left_of": "two_right_of",
+    "two_right_of": "two_left_of",
+    "clockwise_of": "counterclockwise_of",
+    "counterclockwise_of": "clockwise_of",
 }
 
 def _rand_id(prefix: str, k: int = 6) -> str:
@@ -366,7 +446,8 @@ def generate(
     seed: Optional[int] = None,
     *,
     seating_kind: Optional[str] = None,
-    relation_profile: Optional[str] = None
+    relation_profile: Optional[str] = None,
+    difficulty: str = "low",
 ) -> Puzzle:
     if seed is not None:
         random.seed(seed)
@@ -386,7 +467,11 @@ def generate(
     seats = {i + 1: order[i] for i in range(len(order))}
     seating = Seating(kind=kind, seats=seats)
 
-    relations = _relation_pool(kind, relation_profile)
+    diff_level = (difficulty or "low").lower()
+    if diff_level not in VALID_DIFFICULTY_LEVELS:
+        raise ValueError(f"Unsupported difficulty level: {difficulty}")
+
+    relations = _relation_pool(kind, relation_profile, diff_level)
     if relations and all(rel in SPATIAL_RELATIONS for rel in relations) and len(names) < 2:
         raise ValueError("Spatial relations require at least two people.")
     spatial_map = _build_spatial_relation_map(seating)
@@ -464,6 +549,12 @@ def main() -> None:
         help="Select relation profile (auto, social, spatial, all).",
     )
     parser.add_argument(
+        "--difficulty",
+        choices=VALID_DIFFICULTY_LEVELS,
+        default="low",
+        help="Difficulty tier controlling relation variety (default: low).",
+    )
+    parser.add_argument(
         "--format",
         choices=("json", "text"),
         default="json",
@@ -477,6 +568,7 @@ def main() -> None:
         seed=args.seed,
         seating_kind=args.seating_kind,
         relation_profile=args.relations,
+        difficulty=args.difficulty,
     )
 
     if args.format == "json":
