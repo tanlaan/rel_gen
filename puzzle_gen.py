@@ -216,6 +216,30 @@ def _relation_pool(seating_kind: str, relation_profile: Optional[str]) -> List[s
             deduped.append(rel)
     return deduped
 
+
+def _candidate_edges(
+    names: List[str],
+    relations: List[str],
+    spatial_map: Dict[Tuple[str, str], Set[str]],
+) -> List[Tuple[str, str, str]]:
+    pair_state: Dict[frozenset, str] = {}
+    seen = set()
+    valid_edges: List[Tuple[str, str, str]] = []
+    for subj in names:
+        for obj in names:
+            if len(names) > 1 and subj == obj and any(r in SPATIAL_RELATIONS for r in relations):
+                continue
+            valids = _valid_relations_between(subj, obj, relations, spatial_map, pair_state)
+            for rel in valids:
+                key = (subj, rel, obj)
+                if key in seen:
+                    continue
+                seen.add(key)
+                valid_edges.append(key)
+            for rel in valids:
+                _register_family_relation(pair_state, subj, rel, obj)
+    return valid_edges
+
 INVERSE = {
     "parent_of": "child_of",
     "child_of": "parent_of",
@@ -366,6 +390,14 @@ def generate(
     if relations and all(rel in SPATIAL_RELATIONS for rel in relations) and len(names) < 2:
         raise ValueError("Spatial relations require at least two people.")
     spatial_map = _build_spatial_relation_map(seating)
+    candidate_edges = _candidate_edges(names, relations, spatial_map)
+    max_path = len(candidate_edges)
+    if max_path == 0:
+        raise ValueError("No valid relations can be formed with the current configuration.")
+    if min_graph_len > max_path:
+        raise ValueError(
+            f"Requested path length {min_graph_len} exceeds available unique relations ({max_path})."
+        )
     pair_state: Dict[frozenset, str] = {}
 
     # Path + extra facts
