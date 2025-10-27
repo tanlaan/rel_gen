@@ -6,7 +6,7 @@
 
 ## Build, Test, and Development Commands
 - `python -m venv .venv && source .venv/bin/activate` creates an isolated environment; the project currently uses only the Python standard library, so no extra installs are required.
-- `python puzzle_gen.py [options]` runs the CLI; defaults to `--people 5 --length 2 --difficulty low` and prints JSON unless `--format text` is supplied. Add `--seed` for reproducible runs.
+- `python puzzle_gen.py [options]` runs the CLI; defaults to `--people 5 --length 2 --difficulty low` and prints JSON unless `--format text` is supplied. Add `--seed` for reproducible runs, and `--dense` for compact output (text sections collapse into single lines; JSON switches to minified form).
 - `python - <<'PY' ... PY` blocks are handy for quick manual checks; prefer deterministic seeds (`generate(6, 3, seed=42)`) when sharing output in reviews.
 
 ## Coding Style & Naming Conventions

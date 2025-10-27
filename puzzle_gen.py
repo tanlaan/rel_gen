@@ -371,6 +371,7 @@ class Puzzle:
     solution_path: List[str]
     dot: str
     solution_summary: List[str]
+    dense: bool = False
 
 def _emit_fact(a: str, rel: str, b: str) -> Fact:
     return Fact(id=_rand_id("f"), subj=a, rel=rel, obj=b)
@@ -451,6 +452,7 @@ def generate(
     seating_kind: Optional[str] = None,
     relation_profile: Optional[str] = None,
     difficulty: str = "low",
+    dense: bool = False,
 ) -> Puzzle:
     if seed is not None:
         random.seed(seed)
@@ -526,6 +528,7 @@ def generate(
         solution_path=path_ids,
         dot=dot,
         solution_summary=solution_summary,
+        dense=dense,
     )
 
 
@@ -571,6 +574,11 @@ def main() -> None:
         default="json",
         help="Output format (default: json).",
     )
+    parser.add_argument(
+        "--dense",
+        action="store_true",
+        help="Condense text output by removing blank lines between sections.",
+    )
     args = parser.parse_args()
 
     puzzle = generate(
@@ -580,33 +588,46 @@ def main() -> None:
         seating_kind=args.seating_kind,
         relation_profile=args.relations,
         difficulty=args.difficulty,
+        dense=args.dense,
     )
 
     if args.format == "json":
-        print(json.dumps(asdict(puzzle), indent=2))
+        if args.dense:
+            print(json.dumps(asdict(puzzle), separators=(",", ":")))
+        else:
+            print(json.dumps(asdict(puzzle), indent=2))
         return
+
+    dense_mode = args.dense
 
     print(f"Seating ({puzzle.seating.kind}):")
     for pos, name in sorted(puzzle.seating.seats.items()):
         display = "(empty)" if _is_empty(name) else name
         print(f"  {pos}: {display}")
 
-    print("\nFacts:")
-    for fact in puzzle.facts:
-        print(f"  {fact.id}: {fact.subj} {fact.rel} {fact.obj}")
+    def emit_section(title: str, items: List[str]) -> None:
+        if not items:
+            return
+        if dense_mode:
+            body = "; ".join(item.strip() for item in items if item)
+            print(f"{title} {body}")
+        else:
+            print()
+            print(title)
+            for item in items:
+                print(f"  {item}")
 
-    if puzzle.dot:
-        print("\nRelations:")
-        for line in puzzle.dot.splitlines():
-            print(f"  {_colorize_relation_line(line)}")
+    facts_items = [f"{fact.id}: {fact.subj} {fact.rel} {fact.obj}" for fact in puzzle.facts]
+    emit_section("Facts:", facts_items)
 
-    print("\nSolution path IDs:")
-    print("  " + ", ".join(puzzle.solution_path))
+    relation_items = [_colorize_relation_line(line) for line in puzzle.dot.splitlines() if line]
+    emit_section("Relations:", relation_items)
 
-    if puzzle.solution_summary:
-        print("\nSolution summary:")
-        for line in puzzle.solution_summary:
-            print(f"  {_colorize_relation_line(line)}")
+    path_items = [", ".join(puzzle.solution_path)] if puzzle.solution_path else []
+    emit_section("Solution path IDs:", path_items)
+
+    summary_items = [_colorize_relation_line(line) for line in puzzle.solution_summary]
+    emit_section("Solution summary:", summary_items)
 
 
 if __name__ == "__main__":
