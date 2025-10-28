@@ -2,8 +2,10 @@
 import argparse
 import json
 import random
+import sys
 from dataclasses import dataclass, asdict
-from typing import Dict, List, Optional, Set, Tuple
+from pathlib import Path
+from typing import Dict, List, Optional, Set, TextIO, Tuple
 
 FIRST_NAMES = [
     "Alex", "Sam", "Jordan", "Taylor", "Casey", "Riley", "Avery", "Morgan", "Quinn", "Reese",
@@ -532,6 +534,52 @@ def generate(
     )
 
 
+def _format_puzzle_text(puzzle: Puzzle, dense: bool) -> str:
+    lines: List[str] = [f"Seating ({puzzle.seating.kind}):"]
+    for pos, name in sorted(puzzle.seating.seats.items()):
+        display = "(empty)" if _is_empty(name) else name
+        lines.append(f"  {pos}: {display}")
+
+    def emit_section(title: str, items: List[str]) -> None:
+        if not items:
+            return
+        if dense:
+            body = "; ".join(item.strip() for item in items if item)
+            lines.append(f"{title} {body}")
+            return
+        lines.append("")
+        lines.append(title)
+        lines.extend(f"  {item}" for item in items)
+
+    facts_items = [f"{fact.id}: {fact.subj} {fact.rel} {fact.obj}" for fact in puzzle.facts]
+    emit_section("Facts:", facts_items)
+
+    relation_items = [_colorize_relation_line(line) for line in puzzle.dot.splitlines() if line]
+    emit_section("Relations:", relation_items)
+
+    path_items = [", ".join(puzzle.solution_path)] if puzzle.solution_path else []
+    emit_section("Solution path IDs:", path_items)
+
+    summary_items = [_colorize_relation_line(line) for line in puzzle.solution_summary]
+    emit_section("Solution summary:", summary_items)
+
+    return "\n".join(lines)
+
+
+def _format_puzzle(puzzle: Puzzle, output_format: str, dense: bool) -> str:
+    if output_format == "json":
+        if dense:
+            return json.dumps(asdict(puzzle), separators=(",", ":"))
+        return json.dumps(asdict(puzzle), indent=2)
+    return _format_puzzle_text(puzzle, dense)
+
+
+def _write_text(handle: TextIO, content: str) -> None:
+    handle.write(content)
+    if not content.endswith("\n"):
+        handle.write("\n")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Generate a relationship puzzle.")
     parser.add_argument(
@@ -579,55 +627,55 @@ def main() -> None:
         action="store_true",
         help="Condense text output by removing blank lines between sections.",
     )
+    parser.add_argument(
+        "--output",
+        type=str,
+        help="Directory where generated puzzles will be written.",
+    )
+    parser.add_argument(
+        "--count",
+        type=int,
+        default=1,
+        help="Number of puzzles to generate (default: 1).",
+    )
     args = parser.parse_args()
 
-    puzzle = generate(
-        args.people,
-        args.length,
-        seed=args.seed,
-        seating_kind=args.seating_kind,
-        relation_profile=args.relations,
-        difficulty=args.difficulty,
-        dense=args.dense,
-    )
+    if args.count < 1:
+        parser.error("--count must be at least 1.")
 
-    if args.format == "json":
-        if args.dense:
-            print(json.dumps(asdict(puzzle), separators=(",", ":")))
-        else:
-            print(json.dumps(asdict(puzzle), indent=2))
-        return
+    output_dir = Path(args.output).expanduser() if args.output else None
+    if output_dir:
+        try:
+            output_dir.mkdir(parents=True, exist_ok=True)
+        except OSError as exc:
+            raise SystemExit(f"Unable to create output directory '{output_dir}': {exc}") from exc
+        if not output_dir.is_dir():
+            raise SystemExit(f"Output path '{output_dir}' is not a directory.")
 
-    dense_mode = args.dense
+    padding = max(3, len(str(args.count))) if output_dir else 0
+    suffix = "json" if args.format == "json" else "txt"
 
-    print(f"Seating ({puzzle.seating.kind}):")
-    for pos, name in sorted(puzzle.seating.seats.items()):
-        display = "(empty)" if _is_empty(name) else name
-        print(f"  {pos}: {display}")
+    for index in range(1, args.count + 1):
+        iteration_seed = args.seed + (index - 1) if args.seed is not None else None
+        puzzle = generate(
+            args.people,
+            args.length,
+            seed=iteration_seed,
+            seating_kind=args.seating_kind,
+            relation_profile=args.relations,
+            difficulty=args.difficulty,
+            dense=args.dense,
+        )
+        rendered = _format_puzzle(puzzle, args.format, args.dense)
 
-    def emit_section(title: str, items: List[str]) -> None:
-        if not items:
-            return
-        if dense_mode:
-            body = "; ".join(item.strip() for item in items if item)
-            print(f"{title} {body}")
-        else:
-            print()
-            print(title)
-            for item in items:
-                print(f"  {item}")
+        if output_dir:
+            filename = output_dir / f"puzzle_{index:0{padding}d}.{suffix}"
+            with filename.open("w", encoding="utf-8") as handle:
+                _write_text(handle, rendered)
+            print(f"Wrote {filename}", file=sys.stderr)
+            continue
 
-    facts_items = [f"{fact.id}: {fact.subj} {fact.rel} {fact.obj}" for fact in puzzle.facts]
-    emit_section("Facts:", facts_items)
-
-    relation_items = [_colorize_relation_line(line) for line in puzzle.dot.splitlines() if line]
-    emit_section("Relations:", relation_items)
-
-    path_items = [", ".join(puzzle.solution_path)] if puzzle.solution_path else []
-    emit_section("Solution path IDs:", path_items)
-
-    summary_items = [_colorize_relation_line(line) for line in puzzle.solution_summary]
-    emit_section("Solution summary:", summary_items)
+        _write_text(sys.stdout, rendered)
 
 
 if __name__ == "__main__":
